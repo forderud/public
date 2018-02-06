@@ -260,28 +260,15 @@ def ParseIdlFile (idl_file, h_file, c_file):
         f.write('\n')
 
 
-def WriteVersionFile (version):
-    major, minor, patch = version.split('.')
-
-    with open('Version.hpp', 'w') as f:
-        f.write('#pragma once\n')
-        f.write('#define APPAPI_VERSION       '+major+'.'+minor+'.'+patch+'\n')
-        f.write('#define APPAPI_VERSION_SHORT '+major+'.'+minor+'\n')
-
-
 if __name__ == "__main__":
-    if len(sys.argv) < 3:
+    if len(sys.argv) < 2:
         raise Exception('No IDL file arguments provided')
 
-    version = sys.argv[1]
-        
     # load files
-    for filepath in sys.argv[2:]:
+    for filepath in sys.argv[1:]:
         #print('Parsing '+filepath)
         assert(filepath[-4:] == '.idl')
         
         # write generated headers to current dir.
         path, filename = os.path.split(filepath)
         ParseIdlFile(filepath, filename[:-4]+'.h', filename[:-4]+'_i.c')
-    
-    WriteVersionFile(version)
