@@ -462,14 +462,18 @@ struct CComSafeArray {
         (void)copy; // mute unreferenced argument warning
         assert(m_ptr);
         assert(m_ptr->type == SAFEARRAY::TYPE_DATA);
-        m_ptr->data.push_back(t);
+        assert(sizeof(T) == m_ptr->elm_size);
+        const size_t prev_size = m_ptr->data.size();
+        for (size_t i = 0; i < sizeof(T); ++i)
+            m_ptr->data.push_back(0);
+        reinterpret_cast<T&>(m_ptr->data[prev_size]) = t;
         return S_OK;
     }
     
     unsigned int GetCount () const {
         assert(m_ptr);
         assert(m_ptr->type == SAFEARRAY::TYPE_DATA);
-        return static_cast<unsigned int>(m_ptr->data.size());
+        return static_cast<unsigned int>(m_ptr->data.size()/m_ptr->elm_size);
     }
 
     std::unique_ptr<SAFEARRAY> m_ptr;
