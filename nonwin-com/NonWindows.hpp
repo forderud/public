@@ -49,6 +49,7 @@ typedef unsigned int   ULONG;   ///< 32bit unsigned (cannot use 'long' since it'
 typedef int            LONG;    ///< 32bit int (cannot use 'long' since it can be 64bit)
 typedef wchar_t*       BSTR;    ///< zero terminated double-byte text string
 typedef int32_t        HRESULT; ///< 32bit signed int (negative values indicate failure)
+typedef void*          HWND;    ///< window handle
 static_assert(sizeof(int) == 4, "int size not 32bit");
 
 // Common HRESULT codes
@@ -535,6 +536,6 @@ public:
     }
 };
 
-template <class T, const GUID* pclsid>
+template <class T, const GUID* pclsid = nullptr>
 class CComCoClass : public CComObject<T> {
 };
