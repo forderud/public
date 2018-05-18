@@ -123,8 +123,8 @@ def ParseInterfaces (source):
         # add public inheritance
         return substr.replace(':', ': virtual public', 1)
 
-    # pattern to match 'interface ABC : Iunknown {'
-    pattern = re.compile('interface\s*[a-zA-Z0-9_]+?\s*:\s*(IUnknown|IDispatch)\s*{')
+    # pattern to match 'interface ABC : IUnknown {'
+    pattern = re.compile('interface\s*[a-zA-Z0-9_]+?\s*:\s*[a-zA-Z0-9_]+\s*{')
     source = pattern.sub(ReplaceFun, source)
 
     def ReplaceFun2 (match):
@@ -195,7 +195,7 @@ def ParseImport (source):
         last_import = beginidx
         substr = source[beginidx:endidx]
         filename = substr[substr.find('"')+1:substr.rfind('"')]
-        if (filename == 'oaidl.idl') or (filename == 'ocidl.idl'):
+        if filename.lower() in ['oaidl.idl', 'ocidl.idl', 'mfidl.idl']:
             return '' # remove import
 
         # change 'import "abc.idl";' to '#include "abc.h"'
