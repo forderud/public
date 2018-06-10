@@ -1,8 +1,12 @@
+# Check for admin permissions before anything else
+import ctypes
+if not ctypes.windll.shell32.IsUserAnAdmin():
+    raise RuntimeError("Script MUST be run with admin rights")
+
 import comtypes
 import comtypes.client
 import comtypes.server.localserver
 import comtypes.server.register
-import ctypes
 
 # Load type library
 PyComServer = comtypes.client.GetModule("PyComServer.tlb")
@@ -21,9 +25,6 @@ class MyComClass (PyComServer.MyComClass):
 
 
 if __name__ == "__main__":
-    if not ctypes.windll.shell32.IsUserAnAdmin():
-        raise RuntimeError("Script MUST be run with admin rights")
-
     # Register COM class
     comtypes.server.register.Registrar().register(MyComClass)
     
