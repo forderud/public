@@ -1,0 +1,12 @@
+import "oaidl.idl";
+import "ocidl.idl";
+
+
+[ uuid(DD19E5DD-5988-4B35-BBDC-A7E41D6057C8),
+  helpstring("Python COM server")]
+library PyComServer {
+    [uuid(A66B3728-1757-4811-9B7E-47D1EF03F0C8)]
+    coclass MyComClass {
+        [default] interface IUnknown;
+    };
+};
