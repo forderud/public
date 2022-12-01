@@ -21,7 +21,7 @@
 #include <QtCore/qt_windows.h>
 #include <QtAxContainer/QAxScriptManager>
 #include <QtAxContainer/QAxWidget>
-#include <QtAxContainer/private/qaxbase_p.h>
+//#include <QtAxContainer/private/qaxbase_p.h>
 #include <memory>
 #include <sddl.h>
 
@@ -557,7 +557,7 @@ void MainWindow::logSignal(const QString &signal, int argc, void *argv)
     auto params = static_cast<const VARIANT *>(argv);
     for (int a = argc-1; a >= 0; --a) {
         paramlist += QLatin1Char(' ');
-        paramlist += QAxBasePrivate::VARIANTToQVariant(params[a], nullptr).toString();
+        //paramlist += QAxBasePrivate::VARIANTToQVariant(params[a], nullptr).toString();
         paramlist += a > 0 ? QLatin1Char(',') : QLatin1Char(' ');
     }
     if (argc)
