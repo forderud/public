@@ -24,6 +24,8 @@
 //#include <QtAxContainer/private/qaxbase_p.h>
 #include <memory>
 #include <sddl.h>
+#include <atlbase.h>
+#include <userenv.h>
 
 QT_BEGIN_NAMESPACE
 
@@ -137,6 +139,161 @@ private:
     HANDLE m_token = nullptr;
 };
 
+
+/** RAII wrapper of STARTUPINFOEX. */
+struct StartupInfoExWrap {
+    STARTUPINFOEX si = {};
+
+    StartupInfoExWrap ()
+    {
+        si.StartupInfo.cb = sizeof(STARTUPINFOEX);
+
+        const DWORD attr_count = 1; // SECURITY_CAPABILITIES
+        SIZE_T attr_size = 0;
+        InitializeProcThreadAttributeList(NULL, attr_count, /*reserved*/0, /*out*/&attr_size);
+        si.lpAttributeList = (PPROC_THREAD_ATTRIBUTE_LIST)new BYTE[attr_size]();
+        if (!InitializeProcThreadAttributeList(si.lpAttributeList, attr_count, /*reserved*/0, &attr_size))
+            abort();
+    }
+
+    void SetSecurity(SECURITY_CAPABILITIES* sc)
+    {
+        if (!UpdateProcThreadAttribute(si.lpAttributeList, /*reserved*/0, PROC_THREAD_ATTRIBUTE_SECURITY_CAPABILITIES, sc, sizeof(SECURITY_CAPABILITIES), /*reserved*/NULL, /*reserved*/NULL))
+            abort();
+    }
+
+    ~StartupInfoExWrap()
+    {
+        DeleteProcThreadAttributeList(si.lpAttributeList);
+        delete [] (BYTE*)si.lpAttributeList;
+    }
+};
+
+/** RAII wrapper of PROCESS_INFORMATION. */
+struct ProcessInformationWrap {
+    PROCESS_INFORMATION pi = {};
+
+    ~ProcessInformationWrap()
+    {
+        CloseHandle(pi.hThread);
+        pi.hThread = nullptr;
+        CloseHandle(pi.hProcess);
+        pi.hProcess = nullptr;
+    }
+};
+
+/** RAII class for temporarily impersonating an AppContainer-isolated process for the current thread.
+    Intended to be used together with CLSCTX_ENABLE_CLOAKING when creating COM objects. There's no
+    direct support for AppContainer impersonation in Windows, so the impl. will instead create a suspended
+    throw-away process within the AppContainer to use as basis for AppContainer impersonation. This
+    seem kind of weird, but is the approach recommended by Microsoft when opening a support case on the matter.
+
+    Based on "AppContainer Isolation" https://learn.microsoft.com/en-us/windows/win32/secauthz/appcontainer-isolation */
+struct AppContainer {
+    AppContainer(std::wstring clsid)
+    {
+        // Create AppContainer sandbox without any special capabilities
+        static const wchar_t name[] = L"Qt_testcon";
+        static const wchar_t desc[] = L"Qt ActiveQt Test Container";
+        HRESULT hr = CreateAppContainerProfile(name, name, desc, nullptr, 0, &m_sid);
+        if (HRESULT_CODE(hr) == ERROR_ALREADY_EXISTS)
+            hr = DeriveAppContainerSidFromAppContainerName(name, &m_sid); // fallback to opening existing container
+        if (FAILED(hr))
+            abort();
+        
+        SECURITY_CAPABILITIES sec_cap = {};
+        sec_cap.AppContainerSid = m_sid;
+        
+        StartupInfoExWrap si;
+        si.SetSecurity(&sec_cap);
+
+        // Create suspended COM server process in AppContainer
+        std::wstring exe_path = GetExePath(clsid);
+        ProcessInformationWrap pi;
+        DWORD flags = EXTENDED_STARTUPINFO_PRESENT | CREATE_SUSPENDED; // suspended state without any running threads
+        if(!CreateProcess(exe_path.c_str(), nullptr, nullptr, nullptr, FALSE, flags, nullptr, nullptr, (STARTUPINFO*)&si.si, &pi.pi))
+            abort();
+
+        // Kill process since we're only interested in the handle for now.
+        // The COM runtime will later recreate the process when calling CoCreateInstance.
+        TerminateProcess(pi.pi.hProcess, 0);
+        
+        // Create AppContainer impersonation token
+        HANDLE cur_token = nullptr;
+        if (!OpenProcessToken(pi.pi.hProcess, TOKEN_DUPLICATE | TOKEN_ADJUST_DEFAULT | TOKEN_QUERY | TOKEN_ASSIGN_PRIMARY, &cur_token))
+            abort();
+
+        if (!DuplicateTokenEx(cur_token, 0, NULL, SecurityImpersonation, TokenPrimary, &m_token))
+            abort();
+
+        CloseHandle(cur_token);
+        cur_token = nullptr;
+
+        // Impersonate AppContainer on current thread
+        if (!ImpersonateLoggedOnUser(m_token))
+            abort();
+    }
+
+    ~AppContainer()
+    {
+        if (!RevertToSelf())
+            abort();
+
+        CloseHandle(m_token);
+        m_token = nullptr;
+
+        FreeSid(m_sid);
+        m_sid = nullptr;
+    }
+
+private:
+    /** Get EXE path for a COM class. Input is on "{hex-guid}" format. Returns empty string if the COM class is DLL-based and on failure. */
+    static std::wstring GetExePath (const std::wstring & clsid, REGSAM bitness = 0/*same bitness as client*/)
+    {
+        // extract COM class
+        std::wstring reg_path = L"CLSID\\" + clsid + L"\\LocalServer32";
+
+        CRegKey cls_reg;
+        if (cls_reg.Open(HKEY_CLASSES_ROOT, reg_path.c_str(), KEY_READ | bitness) != ERROR_SUCCESS)
+            return L""; // unknown CLSID
+
+        ULONG exe_path_len = 0;
+        if (cls_reg.QueryStringValue(nullptr, nullptr, &exe_path_len) != ERROR_SUCCESS)
+            return L""; // unknown key
+
+        std::wstring exe_path(exe_path_len, L'\0');
+        if (cls_reg.QueryStringValue(nullptr, const_cast<wchar_t*>(exe_path.data()), &exe_path_len) != ERROR_SUCCESS)
+            abort(); // should never happen
+        exe_path.resize(exe_path_len - 1); // remove extra zero-termination
+
+        if (exe_path[0] == L'"') {
+            // remove quotes and "/automation" or "-activex" arguments
+            exe_path = exe_path.substr(1); // remove begin quote
+
+            size_t idx = exe_path.find(L'"');
+            if (idx == exe_path.npos)
+                return L""; // malformed quoting
+            exe_path = exe_path.substr(0, idx); // remove end quote and arguments
+        }
+
+        auto to_lower = [](std::wstring str) {
+            for (wchar_t & c : str)
+                c = towlower(c);
+            return str;
+        };
+
+        // remove "/automation" arguments after unquoted ".exe" (necessary for PowerPoint)
+        size_t idx = to_lower(exe_path).find(L".exe "); // trailing whitespace deliberate
+        if (idx != exe_path.npos)
+            exe_path = exe_path.substr(0, idx+4);
+
+        return exe_path;
+    }
+
+    PSID   m_sid = nullptr;
+    HANDLE m_token = nullptr;
+};
+
 bool MainWindow::addControlFromClsid(const QString &clsid, QAxSelect::SandboxingLevel sandboxing)
 {
     QAxWidget *container = new QAxWidget;
@@ -144,13 +301,14 @@ bool MainWindow::addControlFromClsid(const QString &clsid, QAxSelect::Sandboxing
     bool result = false;
     {
         std::unique_ptr<LowIntegrity> low_integrity;
+        std::unique_ptr<AppContainer> app_container;
 
         if (sandboxing == QAxSelect::SandboxingProcess) {
             // require out-of-process
             container->setClassContext(CLSCTX_LOCAL_SERVER);
         } else if (sandboxing == QAxSelect::SandboxingLowIntegrity) {
-            // impersonate "low integrity"
-            low_integrity.reset(new LowIntegrity);
+            // impersonate AppContainer
+            app_container.reset(new AppContainer(clsid.toStdWString()));
             // require out-of-process and
             // propagate integrity level when calling setControl
             container->setClassContext(CLSCTX_LOCAL_SERVER | CLSCTX_ENABLE_CLOAKING);
